@@ -84,9 +84,6 @@ swiftc -O -parse-as-library EdgeTodo.swift -o EdgeTodo
 
 - ☕ Buy Me a Coffee：https://buymeacoffee.com/sirene122
 
-## 靈感來源
-
-靈感來自 [@lilian.chiuuu](https://www.instagram.com/lilian.chiuuu/) 的一篇貼文，內容是一個不用特地記得打開的待辦清單。
 
 ## 授權
 
