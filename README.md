@@ -1,6 +1,6 @@
 # EdgeTodo ✿
 
-**English** | [繁體中文](README.zh-Hant.md)
+**English** | [繁體中文](README.zh-Hant.md) | [简体中文](README.zh-Hans.md)
 
 **A to-do list that lives on the edge of your Mac screen — so you never forget to check it.**
 
