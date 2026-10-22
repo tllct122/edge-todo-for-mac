@@ -84,9 +84,6 @@ If EdgeTodo makes your day a little lighter, you can support it here:
 
 - ☕ Buy Me a Coffee: https://buymeacoffee.com/sirene122
 
-## Inspiration
-
-Inspired by a post from [@lilian.chiuuu](https://www.instagram.com/lilian.chiuuu/) about a to-do list you don't have to remember to open.
 
 ## License
 
