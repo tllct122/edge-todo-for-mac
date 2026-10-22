@@ -1,6 +1,6 @@
 # EdgeTodo ✿
 
-[English](README.md) | **繁體中文**
+[English](README.md) | **繁體中文** | [简体中文](README.zh-Hans.md)
 
 **一個住在 Mac 螢幕邊緣的待辦清單，讓你永遠不會忘記查看。**
 
