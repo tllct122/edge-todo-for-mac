@@ -17,6 +17,7 @@ Most to-do apps make you stop what you're doing and open another app. EdgeTodo h
 - 🔁 **Repeating tasks**
   - *Repeat anytime* — habits you do often but not daily (gym, laundry). Each click logs a completion and shows "last: 3 days ago · 12×"
   - *Scheduled* — every day, week, month, or any custom interval (every 3 days, every 2 weeks…). Once done, it shows when it's next due, comes back automatically, and turns red when overdue. Daily tasks get a 🔥 streak counter
+- ⏰ **Due dates & reminders** — give any task a deadline. As it gets close, it moves to a "due soon" section at the top and turns yellow → orange → red. The screen edge glows when something is due today or overdue (so you notice even when the panel is hidden), the menu bar icon shows a count, and you get a notification the day before and on the day
 - 📌 **Pin tasks to the top** — the most important ones stay in a highlighted section above everything else
 - ↕️ **Drag to reorder** — arrange tasks however you like, even across categories
 - 🗂 **Categories & states** — group tasks with `#work`, `#life`, `#study`… and sort them into To-do / Pending / Done / Cancelled
@@ -42,6 +43,8 @@ The script builds the app, installs it to `/Applications`, and launches it.
 | Add a task | Type at the bottom. Add `#category` to file it, e.g. `edit raw clips #content` |
 | Complete a task | Click the checkbox |
 | Add a repeating task | Click the ↻ button next to + (cycles: none → anytime → daily → weekly → monthly), or type it: `/repeat`, `/daily`, `/weekly`, `/monthly`, or a custom interval like `/3d`, `/2w`, `/6m`, `/every 10 days` — e.g. `water plants #home /3d` |
+| Add a due date | Click the 📅 button next to + and pick a date (and optional time), or type it: `/due fri`, `/due 10/25`, `/due 10/25 6pm`, `/due 3d`, `/today`, `/tmr 9am` — e.g. `essay #study /due fri 11:59pm` |
+| Change or remove a due date | Right-click → **Due Date** |
 | Log a repeating task | Click its ↻ icon — every click records a new completion time |
 | Reorder tasks | Drag a task onto another spot. Dropping it into another category moves it there; dropping it into 📌 pins it. Or right-click → **Move Up / Move Down** |
 | Pin a task to the top | Right-click → **Pin to Top** |
@@ -49,6 +52,7 @@ The script builds the app, installs it to `/Applications`, and launches it.
 | Undo a check-in | Right-click → **Undo Last Check-in** |
 | Move / re-categorize / delete | Right-click a task |
 | Keep it open | Click 📌 |
+| Reminder settings | Settings → **Due Dates & Reminders**: what counts as "due soon", reminder time, edge glow, notifications |
 | Settings | Click ⚙︎ on the panel, or the ☑︎ menu bar icon → **Settings…** (⌘,) |
 | Launch at login | ☑︎ menu bar icon → **Open at Login** |
 
@@ -68,7 +72,7 @@ Only `title` is required; everything else has defaults:
 
 `status` is one of `todo`, `pending`, `completed`, `cancelled`.
 
-Add `"pinned": true` to keep a task at the top. Repeating tasks add `"repeat": "anytime"`, or a schedule like `"repeat": "every", "every": 3, "unit": "day"` (`unit` is `day`, `week` or `month`; `"daily"`, `"weekly"` and `"monthly"` work as shortcuts). The app records `lastDone` and a `history` of check-in timestamps (ISO 8601) — handy if you want an AI to summarize your habits.
+Add `"due": "2026-10-25"` (or `"2026-10-25 18:00"` with a time) to give a task a deadline. Add `"pinned": true` to keep a task at the top. Repeating tasks add `"repeat": "anytime"`, or a schedule like `"repeat": "every", "every": 3, "unit": "day"` (`unit` is `day`, `week` or `month`; `"daily"`, `"weekly"` and `"monthly"` work as shortcuts). The app records `lastDone` and a `history` of check-in timestamps (ISO 8601) — handy if you want an AI to summarize your habits.
 
 ## Build manually
 
