@@ -8,6 +8,7 @@ import AppKit
 import Combine
 import ServiceManagement
 import UniformTypeIdentifiers
+import UserNotifications
 
 // MARK: - Color helpers
 
@@ -112,6 +113,12 @@ final class AppSettings: ObservableObject {
         static let width = 320.0
         static let height = 480.0
         static let corner = 18.0
+        static let soonDays = 2
+        static let dueOnTop = true
+        static let edgeGlow = true
+        static let notify = true
+        static let remindMinutes = 9 * 60      // 9:00 AM
+        static let menuBadge = true
     }
 
     @Published var fontChoice: FontChoice { didSet { save() } }
@@ -130,6 +137,12 @@ final class AppSettings: ObservableObject {
     @Published var width: Double { didSet { save() } }
     @Published var height: Double { didSet { save() } }
     @Published var corner: Double { didSet { save() } }
+    @Published var soonDays: Int { didSet { save() } }
+    @Published var dueOnTop: Bool { didSet { save() } }
+    @Published var edgeGlow: Bool { didSet { save() } }
+    @Published var notify: Bool { didSet { save() } }
+    @Published var remindMinutes: Int { didSet { save() } }
+    @Published var menuBadge: Bool { didSet { save() } }
 
     init() {
         let d = AppSettings.d
@@ -149,6 +162,12 @@ final class AppSettings: ObservableObject {
         width = d.object(forKey: "width") as? Double ?? Default.width
         height = d.object(forKey: "height") as? Double ?? Default.height
         corner = d.object(forKey: "corner") as? Double ?? Default.corner
+        soonDays = d.object(forKey: "soonDays") as? Int ?? Default.soonDays
+        dueOnTop = d.object(forKey: "dueOnTop") as? Bool ?? Default.dueOnTop
+        edgeGlow = d.object(forKey: "edgeGlow") as? Bool ?? Default.edgeGlow
+        notify = d.object(forKey: "notify") as? Bool ?? Default.notify
+        remindMinutes = d.object(forKey: "remindMinutes") as? Int ?? Default.remindMinutes
+        menuBadge = d.object(forKey: "menuBadge") as? Bool ?? Default.menuBadge
     }
 
     private func save() {
@@ -169,6 +188,12 @@ final class AppSettings: ObservableObject {
         d.set(width, forKey: "width")
         d.set(height, forKey: "height")
         d.set(corner, forKey: "corner")
+        d.set(soonDays, forKey: "soonDays")
+        d.set(dueOnTop, forKey: "dueOnTop")
+        d.set(edgeGlow, forKey: "edgeGlow")
+        d.set(notify, forKey: "notify")
+        d.set(remindMinutes, forKey: "remindMinutes")
+        d.set(menuBadge, forKey: "menuBadge")
     }
 
     func reset() {
@@ -188,6 +213,12 @@ final class AppSettings: ObservableObject {
         width = Default.width
         height = Default.height
         corner = Default.corner
+        soonDays = Default.soonDays
+        dueOnTop = Default.dueOnTop
+        edgeGlow = Default.edgeGlow
+        notify = Default.notify
+        remindMinutes = Default.remindMinutes
+        menuBadge = Default.menuBadge
     }
 
     /// White-ish text when pinned → switch the pinned panel to a dark look.
@@ -313,15 +344,16 @@ struct TodoItem: Codable, Identifiable, Equatable {
     var lastDone: String?
     var history: [String]          // ISO timestamps of every check-in (repeating items)
     var pinned: Bool               // shown in the 📌 section at the top
+    var due: String?               // "2026-10-25" or "2026-10-25 18:00" (one-off tasks)
 
     enum CodingKeys: String, CodingKey {
-        case id, title, category, status, created, lastDone, history, pinned, every, unit
+        case id, title, category, status, created, lastDone, history, pinned, every, unit, due
         case repeatMode = "repeat"
     }
 
     init(id: String = UUID().uuidString, title: String, category: String,
          status: TodoStatus = .todo, created: String? = nil,
-         rule: RepeatRule = .none) {
+         rule: RepeatRule = .none, due: String? = nil) {
         self.id = id
         self.title = title
         self.category = category
@@ -333,6 +365,7 @@ struct TodoItem: Codable, Identifiable, Equatable {
         self.lastDone = nil
         self.history = []
         self.pinned = false
+        self.due = due
     }
 
     // Lenient decoding: an AI only needs to write "title"; everything else has defaults.
@@ -360,6 +393,8 @@ struct TodoItem: Codable, Identifiable, Equatable {
         history = (try? c.decode([String].self, forKey: .history)) ?? []
         lastDone = (try? c.decode(String.self, forKey: .lastDone)) ?? history.last
         pinned = (try? c.decode(Bool.self, forKey: .pinned)) ?? false
+        // accept any date format DueDate understands, store it normalized
+        due = (try? c.decode(String.self, forKey: .due)).flatMap { DueDate.normalize($0) }
     }
 
     // Keep the JSON tidy: only write repeat fields for repeating items.
@@ -371,6 +406,7 @@ struct TodoItem: Codable, Identifiable, Equatable {
         try c.encode(status, forKey: .status)
         try c.encodeIfPresent(created, forKey: .created)
         if pinned { try c.encode(true, forKey: .pinned) }
+        try c.encodeIfPresent(due, forKey: .due)
         if repeatMode != .none {
             try c.encode(repeatMode, forKey: .repeatMode)
             if repeatMode == .every {
@@ -411,6 +447,33 @@ struct TodoItem: Codable, Identifiable, Equatable {
         return cal.dateComponents([.day], from: due, to: cal.startOfDay(for: now)).day
     }
 
+    // MARK: Due date
+
+    /// Parsed due date. Only one-off tasks use it.
+    var dueInfo: (date: Date, hasTime: Bool)? {
+        guard repeatMode == .none, let d = due else { return nil }
+        return DueDate.decode(d)
+    }
+
+    /// The moment it's late: the set time, or the end of the due day.
+    var dueDeadline: Date? {
+        guard let info = dueInfo else { return nil }
+        if info.hasTime { return info.date }
+        let cal = Calendar.current
+        return cal.date(byAdding: .day, value: 1, to: cal.startOfDay(for: info.date))
+    }
+
+    func urgency(_ now: Date, soonDays: Int) -> Urgency {
+        guard status == .todo || status == .pending,
+              let d = dueInfo?.date, let deadline = dueDeadline else { return .noDue }
+        if now >= deadline { return .overdue }
+        let cal = Calendar.current
+        let days = cal.dateComponents([.day], from: cal.startOfDay(for: now), to: cal.startOfDay(for: d)).day ?? 0
+        if days <= 0 { return .today }
+        if days <= soonDays { return .soon }
+        return .later
+    }
+
     /// Consecutive days with a check-in, ending today (or yesterday if not done yet today).
     func streak(_ now: Date) -> Int {
         let cal = Calendar.current
@@ -424,6 +487,161 @@ struct TodoItem: Codable, Identifiable, Equatable {
             day = prev
         }
         return n
+    }
+}
+
+// MARK: - Due dates
+
+enum Urgency: Int, Comparable {
+    case noDue, later, soon, today, overdue
+    static func < (a: Urgency, b: Urgency) -> Bool { a.rawValue < b.rawValue }
+
+    /// Needs attention → floats to the top, gets colored
+    var isUrgent: Bool { self >= .soon }
+
+    var color: Color {
+        switch self {
+        case .overdue: return Color(hex: "FF3B30")
+        case .today: return Color(hex: "FF9500")
+        case .soon: return Color(hex: "E0A100")
+        case .later, .noDue: return .clear
+        }
+    }
+}
+
+enum DueDate {
+    private static func fmt(_ pattern: String) -> DateFormatter {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.calendar = Calendar(identifier: .gregorian)
+        f.timeZone = .current
+        f.dateFormat = pattern
+        return f
+    }
+    private static let dayOnly = fmt("yyyy-MM-dd")
+    private static let dayTime = fmt("yyyy-MM-dd HH:mm")
+    private static let dayTimeT = fmt("yyyy-MM-dd'T'HH:mm")
+
+    static func encode(_ d: Date, hasTime: Bool) -> String {
+        (hasTime ? dayTime : dayOnly).string(from: d)
+    }
+
+    static func decode(_ s: String) -> (date: Date, hasTime: Bool)? {
+        let t = s.trimmingCharacters(in: .whitespaces)
+        if t.count >= 16 {
+            let head = String(t.prefix(16))
+            if let d = dayTime.date(from: head) ?? dayTimeT.date(from: head) { return (d, true) }
+        }
+        if let d = isoFormatter.date(from: t) { return (d, true) }
+        if let d = dayOnly.date(from: String(t.prefix(10))) { return (d, false) }
+        return nil
+    }
+
+    static func normalize(_ s: String) -> String? {
+        decode(s).map { encode($0.date, hasTime: $0.hasTime) }
+    }
+
+    // ---- typing shortcuts: "/due fri", "/due 10/25 6pm", "/due 3d", "/today", "/tmr" ----
+
+    private static let weekdays: [String: Int] = [
+        "sun": 1, "sunday": 1, "mon": 2, "monday": 2, "tue": 3, "tues": 3, "tuesday": 3,
+        "wed": 4, "wednesday": 4, "thu": 5, "thur": 5, "thurs": 5, "thursday": 5,
+        "fri": 6, "friday": 6, "sat": 7, "saturday": 7,
+    ]
+
+    /// A day word → start of that day.
+    static func parseDay(_ token: String, now: Date) -> Date? {
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: now)
+        let t = token.lowercased()
+        switch t {
+        case "today", "tod": return today
+        case "tomorrow", "tmr", "tmrw", "tom": return cal.date(byAdding: .day, value: 1, to: today)
+        default: break
+        }
+        if let wd = weekdays[t] {          // next occurrence, today counts
+            let diff = (wd - cal.component(.weekday, from: today) + 7) % 7
+            return cal.date(byAdding: .day, value: diff, to: today)
+        }
+        // "+3d", "3d", "2w", "1m" → that many days / weeks / months from today
+        let rel = t.hasPrefix("+") ? String(t.dropFirst()) : t
+        if let r = RepeatRule.parse(rel) {
+            return cal.date(byAdding: r.unit.component, value: r.every, to: today)
+        }
+        // "2026-10-25"
+        if let d = dayOnly.date(from: t) { return d }
+        // "10/25", "25/10", "10/25/2026"
+        let parts = t.split(separator: "/").compactMap { Int($0) }
+        if parts.count == 2 || parts.count == 3 {
+            var (m, d) = (parts[0], parts[1])
+            if m > 12 && d <= 12 { swap(&m, &d) }          // 25/10 → Oct 25
+            var comps = DateComponents(month: m, day: d)
+            if parts.count == 3 {
+                comps.year = parts[2] < 100 ? 2000 + parts[2] : parts[2]
+                return cal.date(from: comps)
+            }
+            comps.year = cal.component(.year, from: today)
+            guard var date = cal.date(from: comps) else { return nil }
+            if date < today, let next = cal.date(byAdding: .year, value: 1, to: date) { date = next }
+            return date
+        }
+        return nil
+    }
+
+    /// "18:00", "6pm", "6:30pm", "noon" → (hour, minute)
+    static func parseTime(_ token: String) -> (Int, Int)? {
+        var t = token.lowercased()
+        if t == "noon" { return (12, 0) }
+        if t == "midnight" { return (23, 59) }
+        var pm = false, am = false
+        if t.hasSuffix("pm") { pm = true; t.removeLast(2) } else if t.hasSuffix("am") { am = true; t.removeLast(2) }
+        let parts = t.split(separator: ":").map(String.init)
+        guard let h0 = Int(parts.first ?? ""), parts.count <= 2 else { return nil }
+        let m = parts.count == 2 ? (Int(parts[1]) ?? -1) : 0
+        if parts.count == 1 && !(am || pm) { return nil }  // plain "6" is ambiguous
+        var h = h0
+        if pm && h < 12 { h += 12 }
+        if am && h == 12 { h = 0 }
+        guard (0...23).contains(h), (0...59).contains(m) else { return nil }
+        return (h, m)
+    }
+
+    /// Reads a day (and an optional time right after it) from tokens[i...].
+    /// Returns the stored string and how many tokens were used.
+    static func parse(_ tokens: [String], at i: Int, now: Date) -> (String, Int)? {
+        guard i < tokens.count, let day = parseDay(tokens[i], now: now) else { return nil }
+        if i + 1 < tokens.count, let hm = parseTime(tokens[i + 1]),
+           let d = Calendar.current.date(bySettingHour: hm.0, minute: hm.1, second: 0, of: day) {
+            return (encode(d, hasTime: true), 2)
+        }
+        return (encode(day, hasTime: false), 1)
+    }
+
+    /// Subtitle text for a due date.
+    static func label(_ date: Date, hasTime: Bool, urgency: Urgency, now: Date) -> String {
+        let cal = Calendar.current
+        let tf = DateFormatter()
+        tf.locale = Locale(identifier: "en_US")
+        tf.dateFormat = "h:mm a"
+        let time = hasTime ? " \(tf.string(from: date))" : ""
+        let wf = DateFormatter()
+        wf.locale = Locale(identifier: "en_US")
+        wf.dateFormat = "EEE"
+        let days = cal.dateComponents([.day], from: cal.startOfDay(for: now), to: cal.startOfDay(for: date)).day ?? 0
+
+        switch urgency {
+        case .overdue:
+            if days == 0 { return "⏰ overdue · was due\(time)" }
+            let n = -days
+            return "⏰ overdue \(n) day\(n == 1 ? "" : "s") · \(shortDate(date, now: now))"
+        case .today:
+            return "🔥 due today\(time)"
+        case .soon:
+            if days == 1 { return "📅 due tomorrow\(time)" }
+            return "📅 due in \(days) days · \(wf.string(from: date))\(time)"
+        case .later, .noDue:
+            return "📅 due \(wf.string(from: date)), \(shortDate(date, now: now))\(time)"
+        }
     }
 }
 
@@ -523,7 +741,11 @@ final class TodoStore: ObservableObject {
     // "vitamins /daily"         -> every day   (/weekly, /monthly too)
     // "water plants /3d"        -> every 3 days (/2w = 2 weeks, /1m = 1 month)
     // "haircut /every 6 weeks"  -> every 6 weeks
-    func add(_ raw: String, status: TodoStatus, rule: RepeatRule = .none) {
+    // "essay /due fri"           -> due this Friday
+    // "submit hw /due 10/25 6pm" -> due Oct 25 at 6 PM   (also /today, /tmr, /due 3d)
+    func add(_ raw: String, status: TodoStatus, rule: RepeatRule = .none, due: String? = nil) {
+        var due = due
+        let now = Date()
         var words: [String] = []
         var category = "inbox"
         var rule = rule
@@ -542,6 +764,15 @@ final class TodoStore: ObservableObject {
                 rule = .monthly
             } else if lower == "/repeat" || lower == "/anytime" {
                 rule = .anytime
+            } else if lower == "/today" || lower == "/tmr" || lower == "/tmrw" || lower == "/tomorrow" {
+                // "/tmr" or "/tmr 6pm"
+                if let r = DueDate.parse([String(lower.dropFirst())] + tokens[(i + 1)...], at: 0, now: now) {
+                    due = r.0; i += r.1 - 1
+                }
+            } else if lower == "/due" || lower == "/by" || lower == "/ddl" {
+                if let r = DueDate.parse(tokens, at: i + 1, now: now) {
+                    due = r.0; i += r.1
+                }
             } else if lower == "/every" {
                 // "/every 3d" or "/every 3 days"
                 if i + 1 < tokens.count, let r = RepeatRule.parse(tokens[i + 1]) {
@@ -558,8 +789,10 @@ final class TodoStore: ObservableObject {
         }
         let title = words.joined(separator: " ").trimmingCharacters(in: .whitespaces)
         guard !title.isEmpty else { return }
+        // due dates are for one-off tasks
         todos.append(TodoItem(title: title, category: category, status: status,
-                              created: TodoStore.now(), rule: rule))
+                              created: TodoStore.now(), rule: rule,
+                              due: rule.mode == .none ? due : nil))
         save()
     }
 
@@ -582,6 +815,7 @@ final class TodoStore: ObservableObject {
     func setRepeat(_ id: String, _ rule: RepeatRule) {
         update(id) { item in
             item.rule = rule
+            if rule.mode != .none { item.due = nil }
             if rule.mode != .none && (item.status == .completed || item.status == .cancelled) {
                 item.status = .todo
             }
@@ -609,6 +843,7 @@ final class TodoStore: ObservableObject {
     func setStatus(_ id: String, _ s: TodoStatus) { update(id) { $0.status = s } }
     func setCategory(_ id: String, _ c: String) { update(id) { $0.category = c } }
     func togglePinned(_ id: String) { update(id) { $0.pinned.toggle() } }
+    func setDue(_ id: String, _ due: String?) { update(id) { $0.due = due } }
 
     /// Drag & drop: put `id` where `targetId` is. Dropping onto a task in another
     /// category moves it into that category; dropping into the pinned section pins it.
@@ -658,6 +893,8 @@ final class TodoStore: ObservableObject {
         TodoItem(title: "change bedsheets", category: "life", rule: RepeatRule(mode: .every, every: 2, unit: .week)),
         TodoItem(title: "get groceries", category: "life"),
         TodoItem(title: "organize raw clips", category: "content"),
+        TodoItem(title: "finish essay", category: "study",
+                 due: DueDate.encode(Calendar.current.date(byAdding: .day, value: 2, to: Date()) ?? Date(), hasTime: false)),
         TodoItem(title: "hover the right edge to open me ✿", category: "study"),
     ]
 }
@@ -725,6 +962,9 @@ struct PanelView: View {
     @State private var newText = ""
     @State private var newRepeat: RepeatRule = .none
     @State private var dragging: String?    // id of the task being dragged
+    @State private var newDue: String?      // due date picked for the task being typed
+    @State private var pickingDue = false
+    @State private var pulse = false
     @State private var now = Date()      // ticks so "x days ago" and daily resets stay current
     private let clock = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
 
@@ -763,9 +1003,34 @@ struct PanelView: View {
                     .fill(Color(hex: settings.tintHex).opacity(settings.tintStrength))
             }
         )
+        // Glowing strip on the left edge — still visible when the panel is tucked away
+        .overlay(alignment: .leading) { edgeGlow }
         .animation(.easeInOut(duration: 0.2), value: state.pinned)
         .animation(.easeInOut(duration: 0.2), value: state.panelKey)
         .onReceive(clock) { now = $0 }
+    }
+
+    /// Most urgent due date across all open tasks.
+    private var topUrgency: Urgency {
+        store.todos.map { $0.urgency(now, soonDays: settings.soonDays) }.max() ?? .noDue
+    }
+
+    @ViewBuilder
+    private var edgeGlow: some View {
+        let u = topUrgency
+        if settings.edgeGlow && u >= .today {
+            RoundedRectangle(cornerRadius: 2, style: .continuous)
+                .fill(u.color)
+                .frame(width: 4)
+                .padding(.vertical, max(CGFloat(settings.corner), 10))
+                .padding(.leading, 1)
+                .shadow(color: u.color.opacity(0.9), radius: 4)
+                .opacity(pulse ? 1 : 0.45)
+                .animation(.easeInOut(duration: 1.1).repeatForever(autoreverses: true), value: pulse)
+                .onAppear { pulse = true }
+                .onDisappear { pulse = false }
+                .allowsHitTesting(false)
+        }
     }
 
     private var header: some View {
@@ -834,9 +1099,31 @@ struct PanelView: View {
                 .frame(maxWidth: .infinity)
                 .padding(.top, 40)
         } else {
-            let pinnedItems = sinkDoneDaily(items.filter { $0.pinned })
-            let rest = items.filter { !$0.pinned }
+            // ⏰ overdue / due today / due soon float to the top, soonest first
+            let dueItems = settings.dueOnTop
+                ? items.filter { $0.urgency(now, soonDays: settings.soonDays).isUrgent }
+                    .sorted { ($0.dueDeadline ?? .distantFuture) < ($1.dueDeadline ?? .distantFuture) }
+                : []
+            let dueIds = Set(dueItems.map { $0.id })
+            let dueTop = dueItems.map { $0.urgency(now, soonDays: settings.soonDays) }.max() ?? .soon
+            let pinnedItems = sinkDoneDaily(items.filter { $0.pinned && !dueIds.contains($0.id) })
+            let rest = items.filter { !$0.pinned && !dueIds.contains($0.id) }
             VStack(alignment: .leading, spacing: 14) {
+                if !dueItems.isEmpty {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("⏰ due soon")
+                            .font(pal.font(1.04, bold: true))
+                            .foregroundColor(pal.primary)
+                            .padding(.leading, 2)
+                            .padding(.bottom, 2)
+                        ForEach(dueItems) { item in
+                            TodoRow(item: item, store: store, pal: pal, now: now, showCategory: true)
+                        }
+                    }
+                    .padding(8)
+                    .background(RoundedRectangle(cornerRadius: 10).fill(dueTop.color.opacity(0.10)))
+                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(dueTop.color.opacity(0.35), lineWidth: 1))
+                }
                 // 📌 Pinned section always sits on top
                 if !pinnedItems.isEmpty {
                     VStack(alignment: .leading, spacing: 3) {
@@ -887,22 +1174,54 @@ struct PanelView: View {
 
     private var addPlaceholder: String {
         switch newRepeat.mode {
-        case .none: return "Add new todo   #category"
+        case .none:
+            if let d = newDue, let info = DueDate.decode(d) {
+                return "Add task · " + DueDate.label(info.date, hasTime: info.hasTime, urgency: .later, now: now)
+                    .replacingOccurrences(of: "📅 ", with: "")
+            }
+            return "Add new todo   #category"
         case .anytime: return "Add repeating task   #category"
         case .every: return "Add task · \(newRepeat.label.lowercased())"
         }
     }
 
     private var addField: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if pickingDue {
+                DueEditor(pal: pal, initial: newDue,
+                          onSet: { d in
+                              newDue = d
+                              if d != nil { newRepeat = .none }   // due dates are for one-off tasks
+                              pickingDue = false
+                          },
+                          onCancel: { pickingDue = false })
+                    .padding(.horizontal, 4)
+            }
+            addRow
+        }
+    }
+
+    private var addRow: some View {
         HStack(spacing: 6) {
             TextField(addPlaceholder, text: $newText)
                 .textFieldStyle(.plain)
                 .font(pal.font(1.0))
                 .foregroundColor(pal.primary)
                 .onSubmit(submit)
+            // Due date picker
+            Button {
+                pickingDue.toggle()
+            } label: {
+                Image(systemName: newDue == nil ? "calendar" : "calendar.badge.clock")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(newDue == nil && !pickingDue ? pal.secondary.opacity(0.6) : pal.accent)
+            }
+            .buttonStyle(.plain)
+            .help("Due date — or type /due fri, /due 10/25 6pm, /today, /tmr")
             // Cycles: no repeat → anytime → every day → every week → every month
             Button {
                 newRepeat = newRepeat.next
+                if newRepeat.mode != .none { newDue = nil }
             } label: {
                 Image(systemName: newRepeat.icon)
                     .font(.system(size: 12, weight: .semibold))
@@ -925,9 +1244,11 @@ struct PanelView: View {
 
     private func submit() {
         let status: TodoStatus = (tab == .pending) ? .pending : .todo
-        store.add(newText, status: status, rule: newRepeat)
+        store.add(newText, status: status, rule: newRepeat, due: newDue)
         newText = ""
         newRepeat = .none
+        newDue = nil
+        pickingDue = false
         if tab != .pending { tab = .todo }
     }
 }
@@ -943,6 +1264,14 @@ struct TodoRow: View {
     @State private var editingRule = false
     @State private var editEvery = 1
     @State private var editUnit: RepeatUnit = .day
+    @State private var editingDue = false
+
+    private var urgency: Urgency { item.urgency(now, soonDays: pal.s.soonDays) }
+
+    private var dueText: String? {
+        guard let info = item.dueInfo else { return nil }
+        return DueDate.label(info.date, hasTime: info.hasTime, urgency: urgency, now: now)
+    }
 
     private var isDone: Bool { item.status == .completed || item.status == .cancelled }
     private var doneForNow: Bool { item.isDoneForNow(now) }
@@ -963,7 +1292,7 @@ struct TodoRow: View {
 
     /// Small line under the title: "#category" in the pinned section, plus repeat info
     private var subtitle: String? {
-        let parts = [showCategory ? "#\(item.category)" : nil, repeatInfo].compactMap { $0 }
+        let parts = [showCategory ? "#\(item.category)" : nil, repeatInfo, dueText].compactMap { $0 }
         return parts.isEmpty ? nil : parts.joined(separator: "  ")
     }
 
@@ -1020,8 +1349,9 @@ struct TodoRow: View {
                         .lineLimit(2)
                     if let sub = subtitle {
                         Text(sub)
-                            .font(pal.font(0.8))
-                            .foregroundColor(isOverdue ? Color.red.opacity(0.85) : pal.secondary)
+                            .font(pal.font(0.8, bold: urgency >= .today))
+                            .foregroundColor(urgency.isUrgent ? urgency.color
+                                             : (isOverdue ? Color.red.opacity(0.85) : pal.secondary))
                             .lineLimit(1)
                     }
                 }
@@ -1030,11 +1360,27 @@ struct TodoRow: View {
             }
 
             if editingRule { ruleEditor }
+            if editingDue {
+                DueEditor(pal: pal, initial: item.due,
+                          onSet: { d in store.setDue(item.id, d); editingDue = false },
+                          onCancel: { editingDue = false })
+                    .padding(.leading, 24)
+            }
         }
         .padding(.vertical, 4)
         .padding(.horizontal, 6)
         .background(RoundedRectangle(cornerRadius: 7).fill(
-            (pal.pinned ? pal.surface : Color.primary).opacity(hover || editingRule ? (pal.pinned ? 0.3 : 0.06) : 0)))
+            (pal.pinned ? pal.surface : Color.primary).opacity(hover || editingRule || editingDue ? (pal.pinned ? 0.3 : 0.06) : 0)))
+        // urgent tasks get a tinted background and a colored bar on the left
+        .background(RoundedRectangle(cornerRadius: 7).fill(urgency >= .today ? urgency.color.opacity(0.12) : Color.clear))
+        .overlay(alignment: .leading) {
+            if urgency.isUrgent {
+                RoundedRectangle(cornerRadius: 1.5)
+                    .fill(urgency.color)
+                    .frame(width: 3)
+                    .padding(.vertical, 3)
+            }
+        }
         .contentShape(Rectangle())
         .onHover { hover = $0 }
         .contextMenu {
@@ -1051,6 +1397,19 @@ struct TodoRow: View {
             Button("Move Down") { withAnimation(.easeOut(duration: 0.15)) { store.step(item.id, 1) } }
             Divider()
             Button(item.pinned ? "Unpin from Top" : "Pin to Top") { store.togglePinned(item.id) }
+            if item.repeatMode == .none {
+                Menu("Due Date") {
+                    Button("Today") { store.setDue(item.id, quickDue(0)) }
+                    Button("Tomorrow") { store.setDue(item.id, quickDue(1)) }
+                    Button("In 3 Days") { store.setDue(item.id, quickDue(3)) }
+                    Button("Next Week") { store.setDue(item.id, quickDue(7)) }
+                    Button("Pick a Date…") { editingDue = true }
+                    if item.due != nil {
+                        Divider()
+                        Button("Remove Due Date") { store.setDue(item.id, nil) }
+                    }
+                }
+            }
             Menu("Repeat") {
                 ForEach(RepeatRule.cycle, id: \.label) { r in
                     Button((r == item.rule ? "✓ " : "    ") + r.label) { store.setRepeat(item.id, r) }
@@ -1068,6 +1427,19 @@ struct TodoRow: View {
             Divider()
             Button("Delete") { store.delete(item.id) }
         }
+    }
+
+    /// Due date `days` from today, keeping the task's time if it had one.
+    private func quickDue(_ days: Int) -> String {
+        let cal = Calendar.current
+        let day = cal.date(byAdding: .day, value: days, to: cal.startOfDay(for: Date())) ?? Date()
+        if let info = item.dueInfo, info.hasTime {
+            let hm = cal.dateComponents([.hour, .minute], from: info.date)
+            if let d = cal.date(bySettingHour: hm.hour ?? 0, minute: hm.minute ?? 0, second: 0, of: day) {
+                return DueDate.encode(d, hasTime: true)
+            }
+        }
+        return DueDate.encode(day, hasTime: false)
     }
 
     /// Inline "Every [n] [Days | Weeks | Months]" editor
@@ -1108,6 +1480,93 @@ struct TodoRow: View {
         }
         .padding(.leading, 24)
         .padding(.bottom, 2)
+    }
+}
+
+// MARK: - Due date editor (inline calendar)
+
+struct DueEditor: View {
+    let pal: Palette
+    let initial: String?
+    let onSet: (String?) -> Void      // nil = remove the due date
+    let onCancel: () -> Void
+    @State private var date: Date
+    @State private var withTime: Bool
+
+    init(pal: Palette, initial: String?, onSet: @escaping (String?) -> Void, onCancel: @escaping () -> Void) {
+        self.pal = pal
+        self.initial = initial
+        self.onSet = onSet
+        self.onCancel = onCancel
+        let cal = Calendar.current
+        let info = initial.flatMap { DueDate.decode($0) }
+        let tomorrow = cal.date(byAdding: .day, value: 1, to: cal.startOfDay(for: Date())) ?? Date()
+        let fallback = cal.date(bySettingHour: 18, minute: 0, second: 0, of: tomorrow) ?? tomorrow
+        _date = State(initialValue: info?.date ?? fallback)
+        _withTime = State(initialValue: info?.hasTime ?? false)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 5) {
+                quick("Today", 0)
+                quick("Tmr", 1)
+                quick("+3d", 3)
+                quick("+1w", 7)
+            }
+            DatePicker("", selection: $date, displayedComponents: .date)
+                .datePickerStyle(.graphical)
+                .labelsHidden()
+            HStack(spacing: 8) {
+                Toggle(isOn: $withTime) {
+                    Text("Time").font(pal.font(0.85)).foregroundColor(pal.primary)
+                }
+                .toggleStyle(.checkbox)
+                if withTime {
+                    DatePicker("", selection: $date, displayedComponents: .hourAndMinute)
+                        .datePickerStyle(.field)
+                        .labelsHidden()
+                }
+                Spacer()
+            }
+            HStack(spacing: 12) {
+                if initial != nil {
+                    Button("Remove") { onSet(nil) }
+                        .buttonStyle(.plain)
+                        .font(pal.font(0.85))
+                        .foregroundColor(Urgency.overdue.color)
+                }
+                Spacer()
+                Button("Cancel") { onCancel() }
+                    .buttonStyle(.plain)
+                    .font(pal.font(0.85))
+                    .foregroundColor(pal.secondary)
+                Button("Set") { onSet(DueDate.encode(date, hasTime: withTime)) }
+                    .buttonStyle(.plain)
+                    .font(pal.font(0.85, bold: true))
+                    .foregroundColor(pal.accent)
+            }
+        }
+        .padding(8)
+        .background(RoundedRectangle(cornerRadius: 9).fill(pal.surface.opacity(pal.dark ? 0.25 : 0.45)))
+    }
+
+    /// Jump to today + n days, keeping the chosen time.
+    private func quick(_ title: String, _ days: Int) -> some View {
+        Button {
+            let cal = Calendar.current
+            let day = cal.date(byAdding: .day, value: days, to: cal.startOfDay(for: Date())) ?? Date()
+            let hm = cal.dateComponents([.hour, .minute], from: date)
+            date = cal.date(bySettingHour: hm.hour ?? 18, minute: hm.minute ?? 0, second: 0, of: day) ?? day
+        } label: {
+            Text(title)
+                .font(pal.font(0.8))
+                .foregroundColor(pal.primary)
+                .padding(.vertical, 3)
+                .padding(.horizontal, 7)
+                .background(Capsule().fill(pal.accent.opacity(0.12)))
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -1178,6 +1637,17 @@ struct SettingsView: View {
             .background(Capsule().stroke(s.pinnedTextHex == hex ? Color.accentColor : Color.gray.opacity(0.35), lineWidth: 1.2))
         }
         .buttonStyle(.plain)
+    }
+
+    /// "Remind me at" as a Date for the time picker (stored as minutes after midnight).
+    private var remindTime: Binding<Date> {
+        Binding(get: {
+            let cal = Calendar.current
+            return cal.date(byAdding: .minute, value: s.remindMinutes, to: cal.startOfDay(for: Date())) ?? Date()
+        }, set: { d in
+            let c = Calendar.current.dateComponents([.hour, .minute], from: d)
+            s.remindMinutes = (c.hour ?? 9) * 60 + (c.minute ?? 0)
+        })
     }
 
     private func percent(_ v: Double) -> String { "\(Int((v * 100).rounded()))%" }
@@ -1262,6 +1732,38 @@ struct SettingsView: View {
                     Label("Size", systemImage: "rectangle.portrait")
                 }
 
+                GroupBox {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack {
+                            Text("\"Due soon\" means").frame(width: 120, alignment: .leading)
+                            Stepper(value: $s.soonDays, in: 0...14) {
+                                Text(s.soonDays == 0 ? "only due today"
+                                     : "within \(s.soonDays) day\(s.soonDays == 1 ? "" : "s")")
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        Toggle("Move due-soon tasks to the top", isOn: $s.dueOnTop)
+                        Toggle("Glow on the screen edge when something is due today or overdue", isOn: $s.edgeGlow)
+                        Toggle("Show the count on the menu bar icon", isOn: $s.menuBadge)
+                        Toggle("Notifications", isOn: $s.notify)
+                        if s.notify {
+                            HStack {
+                                Text("Remind me at").frame(width: 120, alignment: .leading)
+                                DatePicker("", selection: remindTime, displayedComponents: .hourAndMinute)
+                                    .labelsHidden()
+                                Spacer()
+                            }
+                            Text("You'll get a reminder the day before and on the due day at this time, plus 1 hour before tasks with a set time.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .padding(8)
+                } label: {
+                    Label("Due Dates & Reminders", systemImage: "bell.badge")
+                }
+
                 HStack {
                     Spacer()
                     Button("Reset to Defaults") { s.reset() }
@@ -1269,7 +1771,7 @@ struct SettingsView: View {
             }
             .padding(20)
         }
-        .frame(width: 460, height: 640)
+        .frame(width: 460, height: 720)
     }
 }
 
@@ -1298,7 +1800,7 @@ func roundedMask(radius: CGFloat) -> NSImage {
 }
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUserNotificationCenterDelegate {
     let store = TodoStore()
     let state = PanelState()
     let settings = AppSettings()
@@ -1312,6 +1814,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var mouseTimer: Timer?
     var cancellables = Set<AnyCancellable>()
     var lastCorner: Double = -1
+    var holdOpenUntil: Date?        // keep the panel out for a moment after a notification click
+    var reminderTimer: Timer?
 
     let peek: CGFloat = 6      // how many px stay visible at the screen edge
     let margin: CGFloat = 10
@@ -1392,6 +1896,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         applySettings()
         setupStatusItem()
+        setupReminders()
 
         let t = Timer(timeInterval: 0.05, target: self, selector: #selector(tick),
                       userInfo: nil, repeats: true)
@@ -1462,7 +1967,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func openSettings() {
         if settingsWindow == nil {
-            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 640),
+            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 720),
                              styleMask: [.titled, .closable, .miniaturizable],
                              backing: .buffered, defer: false)
             w.title = "EdgeTodo Settings"
@@ -1512,13 +2017,136 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         statusItem.menu = menu
     }
 
+    // MARK: Due-date reminders
+
+    /// Notifications need a real .app bundle (a bare binary would crash here).
+    var canNotify: Bool { Bundle.main.bundleIdentifier != nil }
+
+    func setupReminders() {
+        if canNotify {
+            UNUserNotificationCenter.current().delegate = self
+            if settings.notify { requestNotificationPermission() }
+        }
+        // Reschedule whenever tasks or settings change (debounced)
+        store.$todos.map { _ in () }
+            .merge(with: settings.objectWillChange.map { _ in () })
+            .debounce(for: .seconds(1), scheduler: RunLoop.main)
+            .sink { [weak self] in
+                guard let self else { return }
+                if self.settings.notify { self.requestNotificationPermission() }
+                self.rescheduleNotifications()
+                self.updateBadge()
+            }
+            .store(in: &cancellables)
+        // Time passing turns "due soon" into "due today" / "overdue"
+        let t = Timer(timeInterval: 60, target: self, selector: #selector(minuteTick),
+                      userInfo: nil, repeats: true)
+        RunLoop.main.add(t, forMode: .common)
+        reminderTimer = t
+        updateBadge()
+        rescheduleNotifications()
+    }
+
+    @objc func minuteTick() { updateBadge() }
+
+    private var askedPermission = false
+    func requestNotificationPermission() {
+        guard canNotify, !askedPermission else { return }
+        askedPermission = true
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+    }
+
+    /// Menu bar icon shows how many tasks are due today or overdue.
+    func updateBadge() {
+        let now = Date()
+        let urgencies = store.todos.map { $0.urgency(now, soonDays: settings.soonDays) }
+        let n = urgencies.filter { $0 >= .today }.count
+        guard let button = statusItem?.button else { return }
+        if settings.menuBadge && n > 0 {
+            statusItem.length = NSStatusItem.variableLength
+            let color: NSColor = urgencies.contains(.overdue) ? .systemRed : .systemOrange
+            button.attributedTitle = NSAttributedString(string: " \(n)", attributes: [
+                .foregroundColor: color,
+                .font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .bold),
+            ])
+            button.imagePosition = .imageLeft
+        } else {
+            button.attributedTitle = NSAttributedString(string: "")
+            statusItem.length = NSStatusItem.squareLength
+        }
+    }
+
+    /// Schedules: day before (if "due soon" covers it), due day at the reminder time,
+    /// and 1 hour before tasks that have a set time.
+    func rescheduleNotifications() {
+        guard canNotify else { return }
+        let center = UNUserNotificationCenter.current()
+        center.removeAllPendingNotificationRequests()
+        guard settings.notify else { return }
+
+        let cal = Calendar.current
+        let now = Date()
+        let tf = DateFormatter()
+        tf.locale = Locale(identifier: "en_US")
+        tf.dateFormat = "h:mm a"
+        var pending: [(Date, String, UNMutableNotificationContent)] = []
+
+        for item in store.todos where item.status == .todo || item.status == .pending {
+            guard let info = item.dueInfo, let deadline = item.dueDeadline else { continue }
+            let day = cal.startOfDay(for: info.date)
+            func at(_ d: Date) -> Date { cal.date(byAdding: .minute, value: settings.remindMinutes, to: d) ?? d }
+            let time = info.hasTime ? " at \(tf.string(from: info.date))" : ""
+
+            var fires: [(Date, String)] = []
+            if settings.soonDays >= 1, let before = cal.date(byAdding: .day, value: -1, to: day) {
+                fires.append((at(before), "Due tomorrow\(time)"))
+            }
+            fires.append((at(day), "Due today\(time)"))
+            if info.hasTime { fires.append((info.date.addingTimeInterval(-3600), "Due in 1 hour")) }
+
+            for (i, f) in fires.enumerated() where f.0 > now && f.0 < deadline {
+                let content = UNMutableNotificationContent()
+                content.title = item.title
+                content.subtitle = "#\(item.category)"
+                content.body = "⏰ " + f.1
+                content.sound = .default
+                pending.append((f.0, "\(item.id)-\(i)", content))
+            }
+        }
+
+        // macOS keeps at most 64 pending notifications — schedule the soonest
+        for (date, id, content) in pending.sorted(by: { $0.0 < $1.0 }).prefix(60) {
+            let comps = cal.dateComponents([.year, .month, .day, .hour, .minute], from: date)
+            let trigger = UNCalendarNotificationTrigger(dateMatching: comps, repeats: false)
+            center.add(UNNotificationRequest(identifier: id, content: content, trigger: trigger))
+        }
+    }
+
+    // Show banners even if EdgeTodo happens to be the active app
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                            willPresent notification: UNNotification,
+                                            withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        completionHandler([.banner, .sound])
+    }
+
+    // Clicking a notification slides the panel out for a few seconds
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                            didReceive response: UNNotificationResponse,
+                                            withCompletionHandler completionHandler: @escaping () -> Void) {
+        Task { @MainActor in
+            self.holdOpenUntil = Date().addingTimeInterval(6)
+            self.expand()
+        }
+        completionHandler()
+    }
+
     // MARK: Hover logic
 
     @objc func tick() {
         let m = NSEvent.mouseLocation
         let exp = expandedFrame()
 
-        if state.pinned || state.previewing {
+        if state.pinned || state.previewing || (holdOpenUntil.map { $0 > Date() } ?? false) {
             outsideSince = nil
             if !expanded { expand() }
             return
