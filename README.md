@@ -25,6 +25,8 @@ Most to-do apps make you stop what you're doing and open another app. EdgeTodo h
 - 🤖 **AI-friendly** — tasks live in a plain JSON file, so any AI assistant (or script) can add tasks for you and the panel updates within a second
 - 🪶 **Tiny & native** — a single Swift file, no dependencies, no account, no cloud
 
+Works great next to [EdgeClip](https://github.com/tllct122/edge-clip-for-mac), a clipboard history that hides at the left edge — EdgeTodo on the right, EdgeClip on the left, so they never overlap.
+
 ## Install
 
 Requires macOS 12 or later (Liquid Glass needs macOS 26+).

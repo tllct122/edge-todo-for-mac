@@ -25,6 +25,8 @@
 - 🤖 **AI 友善**：任務儲存在一個純 JSON 檔案，任何 AI 助理或程式都可以幫你新增任務，面板會在一秒內更新
 - 🪶 **輕巧原生**：只有一個 Swift 檔案，不需要任何套件、帳號或雲端
 
+可以和 [EdgeClip](https://github.com/tllct122/edge-clip-for-mac) 一起用，它是收在螢幕左邊的剪貼簿紀錄：EdgeTodo 在右邊，EdgeClip 在左邊，兩者不會重疊。
+
 ## 安裝
 
 需要 macOS 12 或以上（液態玻璃需要 macOS 26 或以上）。
