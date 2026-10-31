@@ -88,6 +88,16 @@ enum WeightChoice: String, CaseIterable {
     }
 }
 
+enum EdgeSide: String, CaseIterable {
+    case left, right
+    var label: String { self == .left ? "Left" : "Right" }
+}
+
+enum VPosition: String, CaseIterable {
+    case top, middle, bottom
+    var label: String { rawValue.capitalized }
+}
+
 enum GlassChoice: String, CaseIterable {
     case clear, regular
     var label: String { self == .clear ? "Clear" : "Frosted" }
@@ -113,6 +123,8 @@ final class AppSettings: ObservableObject {
         static let width = 320.0
         static let height = 480.0
         static let corner = 18.0
+        static let side = EdgeSide.right
+        static let vPosition = VPosition.top
         static let soonDays = 2
         static let dueOnTop = true
         static let edgeGlow = true
@@ -137,6 +149,8 @@ final class AppSettings: ObservableObject {
     @Published var width: Double { didSet { save() } }
     @Published var height: Double { didSet { save() } }
     @Published var corner: Double { didSet { save() } }
+    @Published var side: EdgeSide { didSet { save() } }
+    @Published var vPosition: VPosition { didSet { save() } }
     @Published var soonDays: Int { didSet { save() } }
     @Published var dueOnTop: Bool { didSet { save() } }
     @Published var edgeGlow: Bool { didSet { save() } }
@@ -162,6 +176,8 @@ final class AppSettings: ObservableObject {
         width = d.object(forKey: "width") as? Double ?? Default.width
         height = d.object(forKey: "height") as? Double ?? Default.height
         corner = d.object(forKey: "corner") as? Double ?? Default.corner
+        side = EdgeSide(rawValue: d.string(forKey: "side") ?? "") ?? Default.side
+        vPosition = VPosition(rawValue: d.string(forKey: "vPosition") ?? "") ?? Default.vPosition
         soonDays = d.object(forKey: "soonDays") as? Int ?? Default.soonDays
         dueOnTop = d.object(forKey: "dueOnTop") as? Bool ?? Default.dueOnTop
         edgeGlow = d.object(forKey: "edgeGlow") as? Bool ?? Default.edgeGlow
@@ -188,6 +204,8 @@ final class AppSettings: ObservableObject {
         d.set(width, forKey: "width")
         d.set(height, forKey: "height")
         d.set(corner, forKey: "corner")
+        d.set(side.rawValue, forKey: "side")
+        d.set(vPosition.rawValue, forKey: "vPosition")
         d.set(soonDays, forKey: "soonDays")
         d.set(dueOnTop, forKey: "dueOnTop")
         d.set(edgeGlow, forKey: "edgeGlow")
@@ -213,6 +231,8 @@ final class AppSettings: ObservableObject {
         width = Default.width
         height = Default.height
         corner = Default.corner
+        side = Default.side
+        vPosition = Default.vPosition
         soonDays = Default.soonDays
         dueOnTop = Default.dueOnTop
         edgeGlow = Default.edgeGlow
@@ -1004,7 +1024,7 @@ struct PanelView: View {
             }
         )
         // Glowing strip on the left edge — still visible when the panel is tucked away
-        .overlay(alignment: .leading) { edgeGlow }
+        .overlay(alignment: settings.side == .left ? .trailing : .leading) { edgeGlow }
         .animation(.easeInOut(duration: 0.2), value: state.pinned)
         .animation(.easeInOut(duration: 0.2), value: state.panelKey)
         .onReceive(clock) { now = $0 }
@@ -1023,7 +1043,7 @@ struct PanelView: View {
                 .fill(u.color)
                 .frame(width: 4)
                 .padding(.vertical, max(CGFloat(settings.corner), 10))
-                .padding(.leading, 1)
+                .padding(settings.side == .left ? .trailing : .leading, 1)
                 .shadow(color: u.color.opacity(0.9), radius: 4)
                 .opacity(pulse ? 1 : 0.45)
                 .animation(.easeInOut(duration: 1.1).repeatForever(autoreverses: true), value: pulse)
@@ -1650,6 +1670,11 @@ struct SettingsView: View {
         })
     }
 
+    /// EdgeClip uses the left edge — used to warn about overlapping panels.
+    private var edgeClipInstalled: Bool {
+        NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.local.edgeclip") != nil
+    }
+
     private func percent(_ v: Double) -> String { "\(Int((v * 100).rounded()))%" }
 
     var body: some View {
@@ -1723,13 +1748,27 @@ struct SettingsView: View {
 
                 GroupBox {
                     VStack(alignment: .leading, spacing: 10) {
+                        Picker("Screen edge", selection: $s.side) {
+                            ForEach(EdgeSide.allCases, id: \.self) { Text($0.label).tag($0) }
+                        }
+                        .pickerStyle(.segmented)
+                        Picker("Position", selection: $s.vPosition) {
+                            ForEach(VPosition.allCases, id: \.self) { Text($0.label).tag($0) }
+                        }
+                        .pickerStyle(.segmented)
+                        if s.side == .left && s.vPosition == .top && edgeClipInstalled {
+                            Text("EdgeClip also sits at the top of the left edge, so the two panels will overlap. Choose Right, or move EdgeTodo to the bottom.")
+                                .font(.caption)
+                                .foregroundColor(Color(hex: "FF9500"))
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                         sliderRow("Width", $s.width, 260...480, step: 10) { "\(Int($0))" }
                         sliderRow("Height", $s.height, 320...800, step: 10) { "\(Int($0))" }
                         sliderRow("Corner radius", $s.corner, 0...32, step: 1) { "\(Int($0))" }
                     }
                     .padding(8)
                 } label: {
-                    Label("Size", systemImage: "rectangle.portrait")
+                    Label("Size & Position", systemImage: "rectangle.portrait")
                 }
 
                 GroupBox {
@@ -1825,14 +1864,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
 
     func expandedFrame() -> NSRect {
         let v = screen.visibleFrame
-        return NSRect(x: v.maxX - panelSize.width - margin,
-                      y: v.maxY - panelSize.height - margin,
-                      width: panelSize.width, height: panelSize.height)
+        let x = settings.side == .left ? v.minX + margin : v.maxX - panelSize.width - margin
+        let y: CGFloat
+        switch settings.vPosition {
+        case .top: y = v.maxY - panelSize.height - margin
+        case .middle: y = v.midY - panelSize.height / 2
+        case .bottom: y = v.minY + margin
+        }
+        return NSRect(x: x, y: y, width: panelSize.width, height: panelSize.height)
     }
 
     func collapsedFrame() -> NSRect {
         var f = expandedFrame()
-        f.origin.x = screen.frame.maxX - peek
+        f.origin.x = settings.side == .left
+            ? screen.frame.minX - panelSize.width + peek
+            : screen.frame.maxX - peek
         return f
     }
 
@@ -1974,13 +2020,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
             w.isReleasedWhenClosed = false
             w.contentView = NSHostingView(rootView: SettingsView(s: settings, glassAvailable: glassView != nil))
             w.center()
-            // Keep it clear of the panel on the right edge.
-            var f = w.frame
-            f.origin.x = max(screen.visibleFrame.minX + 40,
-                             screen.visibleFrame.maxX - CGFloat(settings.width) - f.width - 60)
-            w.setFrame(f, display: false)
             w.delegate = self
             settingsWindow = w
+        }
+        // Keep it clear of the panel.
+        if let w = settingsWindow {
+            var f = w.frame
+            let v = screen.visibleFrame
+            f.origin.x = settings.side == .left
+                ? min(v.maxX - f.width - 40, v.minX + CGFloat(settings.width) + 60)
+                : max(v.minX + 40, v.maxX - CGFloat(settings.width) - f.width - 60)
+            w.setFrame(f, display: false)
         }
         state.previewing = true
         NSApp.activate(ignoringOtherApps: true)
@@ -2153,7 +2203,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
         }
 
         if !expanded {
-            let hotEdge = NSRect(x: screen.frame.maxX - 3, y: exp.minY, width: 3, height: exp.height)
+            let edgeX = settings.side == .left ? screen.frame.minX : screen.frame.maxX - 3
+            let hotEdge = NSRect(x: edgeX, y: exp.minY, width: 3, height: exp.height)
             if hotEdge.contains(m) || panel.frame.contains(m) { expand() }
         } else {
             if exp.insetBy(dx: -24, dy: -24).contains(m) {

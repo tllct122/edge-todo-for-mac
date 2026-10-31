@@ -21,7 +21,7 @@ Most to-do apps make you stop what you're doing and open another app. EdgeTodo h
 - 📌 **Pin tasks to the top** — the most important ones stay in a highlighted section above everything else
 - ↕️ **Drag to reorder** — arrange tasks however you like, even across categories
 - 🗂 **Categories & states** — group tasks with `#work`, `#life`, `#study`… and sort them into To-do / Pending / Done / Cancelled
-- 🎨 **Customize everything** — fonts (any font on your Mac), weight, size, text & accent colors, tint, opacity, size, corner radius
+- 🎨 **Customize everything** — fonts (any font on your Mac), weight, size, text & accent colors, tint, opacity, size, corner radius, left or right edge, top / middle / bottom
 - 🤖 **AI-friendly** — tasks live in a plain JSON file, so any AI assistant (or script) can add tasks for you and the panel updates within a second
 - 🪶 **Tiny & native** — a single Swift file, no dependencies, no account, no cloud
 
@@ -41,7 +41,7 @@ The script builds the app, installs it to `/Applications`, and launches it.
 
 | Action | How |
 |---|---|
-| Open the panel | Move your mouse to the right edge of the screen (upper half) |
+| Open the panel | Move your mouse to the right edge of the screen (upper half) — or wherever you put it in **Settings → Size & Position** |
 | Add a task | Type at the bottom. Add `#category` to file it, e.g. `edit raw clips #content` |
 | Complete a task | Click the checkbox |
 | Add a repeating task | Click the ↻ button next to + (cycles: none → anytime → daily → weekly → monthly), or type it: `/repeat`, `/daily`, `/weekly`, `/monthly`, or a custom interval like `/3d`, `/2w`, `/6m`, `/every 10 days` — e.g. `water plants #home /3d` |
