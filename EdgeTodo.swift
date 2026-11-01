@@ -125,6 +125,7 @@ final class AppSettings: ObservableObject {
         static let corner = 18.0
         static let side = EdgeSide.right
         static let vPosition = VPosition.top
+        static let autoImport = false
         static let soonDays = 2
         static let dueOnTop = true
         static let edgeGlow = true
@@ -151,6 +152,7 @@ final class AppSettings: ObservableObject {
     @Published var corner: Double { didSet { save() } }
     @Published var side: EdgeSide { didSet { save() } }
     @Published var vPosition: VPosition { didSet { save() } }
+    @Published var autoImport: Bool { didSet { save() } }
     @Published var soonDays: Int { didSet { save() } }
     @Published var dueOnTop: Bool { didSet { save() } }
     @Published var edgeGlow: Bool { didSet { save() } }
@@ -178,6 +180,7 @@ final class AppSettings: ObservableObject {
         corner = d.object(forKey: "corner") as? Double ?? Default.corner
         side = EdgeSide(rawValue: d.string(forKey: "side") ?? "") ?? Default.side
         vPosition = VPosition(rawValue: d.string(forKey: "vPosition") ?? "") ?? Default.vPosition
+        autoImport = d.object(forKey: "autoImport") as? Bool ?? Default.autoImport
         soonDays = d.object(forKey: "soonDays") as? Int ?? Default.soonDays
         dueOnTop = d.object(forKey: "dueOnTop") as? Bool ?? Default.dueOnTop
         edgeGlow = d.object(forKey: "edgeGlow") as? Bool ?? Default.edgeGlow
@@ -206,6 +209,7 @@ final class AppSettings: ObservableObject {
         d.set(corner, forKey: "corner")
         d.set(side.rawValue, forKey: "side")
         d.set(vPosition.rawValue, forKey: "vPosition")
+        d.set(autoImport, forKey: "autoImport")
         d.set(soonDays, forKey: "soonDays")
         d.set(dueOnTop, forKey: "dueOnTop")
         d.set(edgeGlow, forKey: "edgeGlow")
@@ -233,6 +237,7 @@ final class AppSettings: ObservableObject {
         corner = Default.corner
         side = Default.side
         vPosition = Default.vPosition
+        autoImport = Default.autoImport
         soonDays = Default.soonDays
         dueOnTop = Default.dueOnTop
         edgeGlow = Default.edgeGlow
@@ -864,6 +869,31 @@ final class TodoStore: ObservableObject {
     func setCategory(_ id: String, _ c: String) { update(id) { $0.category = c } }
     func togglePinned(_ id: String) { update(id) { $0.pinned.toggle() } }
     func setDue(_ id: String, _ due: String?) { update(id) { $0.due = due } }
+
+    /// Adds tasks from a todos.json-style file. Tasks with the same id are updated
+    /// (title, category, due date) but keep your status, pin and order.
+    @discardableResult
+    func importTodos(from url: URL) -> (added: Int, updated: Int)? {
+        guard let data = try? Data(contentsOf: url),
+              let file = try? JSONDecoder().decode(TodoFile.self, from: data) else { return nil }
+        var added = 0, updated = 0
+        for var incoming in file.todos {
+            if let i = todos.firstIndex(where: { $0.id == incoming.id }) {
+                if todos[i].title != incoming.title || todos[i].due != incoming.due || todos[i].category != incoming.category {
+                    todos[i].title = incoming.title
+                    todos[i].category = incoming.category
+                    todos[i].due = incoming.due
+                    updated += 1
+                }
+            } else {
+                if incoming.created == nil { incoming.created = TodoStore.now() }
+                todos.append(incoming)
+                added += 1
+            }
+        }
+        if added + updated > 0 { save() }
+        return (added, updated)
+    }
 
     /// Drag & drop: put `id` where `targetId` is. Dropping onto a task in another
     /// category moves it into that category; dropping into the pinned section pins it.
@@ -1803,6 +1833,19 @@ struct SettingsView: View {
                     Label("Due Dates & Reminders", systemImage: "bell.badge")
                 }
 
+                GroupBox {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Toggle("Import tasks from my Downloads folder", isOn: $s.autoImport)
+                        Text("Files named edgetodo-import….json are added to your list and then moved to the Trash — for example deadlines sent from the Bloom for Blackboard browser extension. macOS will ask once to let EdgeTodo see your Downloads folder.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(8)
+                } label: {
+                    Label("Import", systemImage: "square.and.arrow.down")
+                }
+
                 HStack {
                     Spacer()
                     Button("Reset to Defaults") { s.reset() }
@@ -1943,6 +1986,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
         applySettings()
         setupStatusItem()
         setupReminders()
+        setupImportWatcher()
 
         let t = Timer(timeInterval: 0.05, target: self, selector: #selector(tick),
                       userInfo: nil, repeats: true)
@@ -2053,8 +2097,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
         let pin = NSMenuItem(title: "Pin / Unpin Panel", action: #selector(togglePin), keyEquivalent: "")
         let prefs = NSMenuItem(title: "Settings…", action: #selector(openSettingsFromMenu), keyEquivalent: ",")
         let folder = NSMenuItem(title: "Open Data Folder", action: #selector(openFolder), keyEquivalent: "")
+        let importItem = NSMenuItem(title: "Import Tasks…", action: #selector(importFromMenu), keyEquivalent: "")
         let login = NSMenuItem(title: "Open at Login", action: #selector(toggleLogin(_:)), keyEquivalent: "")
-        for item in [pin, prefs, folder, login] { item.target = self; menu.addItem(item) }
+        for item in [pin, prefs, importItem, folder, login] { item.target = self; menu.addItem(item) }
         if #available(macOS 13.0, *) {
             login.state = SMAppService.mainApp.status == .enabled ? .on : .off
         } else {
@@ -2258,6 +2303,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
 
     @objc func openSettingsFromMenu() {
         openSettings()
+    }
+
+    // MARK: Import
+
+    @objc func importFromMenu() {
+        NSApp.activate(ignoringOtherApps: true)
+        let panel = NSOpenPanel()
+        panel.title = "Import Tasks"
+        panel.allowedContentTypes = [.json]
+        panel.allowsMultipleSelection = true
+        guard panel.runModal() == .OK else { return }
+        var added = 0, updated = 0
+        for url in panel.urls {
+            if let r = store.importTodos(from: url) { added += r.added; updated += r.updated }
+        }
+        announceImport(added: added, updated: updated)
+    }
+
+    var importTimer: Timer?
+
+    func setupImportWatcher() {
+        let t = Timer(timeInterval: 3, target: self, selector: #selector(checkDownloads), userInfo: nil, repeats: true)
+        RunLoop.main.add(t, forMode: .common)
+        importTimer = t
+    }
+
+    /// Picks up files like edgetodo-import.json / edgetodo-import (1).json from ~/Downloads.
+    @objc func checkDownloads() {
+        guard settings.autoImport else { return }
+        let fm = FileManager.default
+        guard let downloads = fm.urls(for: .downloadsDirectory, in: .userDomainMask).first,
+              let files = try? fm.contentsOfDirectory(at: downloads, includingPropertiesForKeys: nil) else { return }
+        var added = 0, updated = 0
+        for url in files where url.lastPathComponent.hasPrefix("edgetodo-import") && url.pathExtension.lowercased() == "json" {
+            guard let r = store.importTodos(from: url) else { continue }   // still downloading, or not a task file
+            added += r.added; updated += r.updated
+            try? fm.trashItem(at: url, resultingItemURL: nil)
+        }
+        if added + updated > 0 { announceImport(added: added, updated: updated) }
+    }
+
+    func announceImport(added: Int, updated: Int) {
+        let parts = [added > 0 ? "\(added) new" : nil, updated > 0 ? "\(updated) updated" : nil].compactMap { $0 }
+        let text = parts.isEmpty ? "Everything was already on your list" : parts.joined(separator: ", ")
+        holdOpenUntil = Date().addingTimeInterval(4)
+        expand()
+        guard canNotify else { return }
+        let content = UNMutableNotificationContent()
+        content.title = "Tasks imported ✿"
+        content.body = text
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "import-\(UUID().uuidString)", content: content, trigger: nil))
     }
 
     @objc func openFolder() {

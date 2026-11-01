@@ -55,6 +55,7 @@ The script builds the app, installs it to `/Applications`, and launches it.
 | Move / re-categorize / delete | Right-click a task |
 | Keep it open | Click 📌 |
 | Reminder settings | Settings → **Due Dates & Reminders**: what counts as "due soon", reminder time, edge glow, notifications |
+| Import tasks | ☑︎ menu bar icon → **Import Tasks…**, or turn on **Settings → Import** to pick up `edgetodo-import….json` files from Downloads automatically — e.g. Blackboard deadlines from [Bloom for Blackboard](https://github.com/tllct122/bloom-for-blackboard) |
 | Settings | Click ⚙︎ on the panel, or the ☑︎ menu bar icon → **Settings…** (⌘,) |
 | Launch at login | ☑︎ menu bar icon → **Open at Login** |
 

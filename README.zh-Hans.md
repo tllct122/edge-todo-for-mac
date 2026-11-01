@@ -55,6 +55,7 @@
 | 移动、改分类、删除 | 在任务上点右键 |
 | 保持面板打开 | 点击 📌 |
 | 提醒设置 | Settings → **Due Dates & Reminders**：“快到期”的天数、提醒时间、屏幕边缘发光、通知 |
+| 导入任务 | 菜单栏 ☑︎ 图标 → **Import Tasks…**，或打开 **Settings → Import**，自动导入“下载”文件夹中的 `edgetodo-import….json`，例如由 [Bloom for Blackboard](https://github.com/tllct122/bloom-for-blackboard) 发来的 Blackboard 截止日期 |
 | 设置 | 点击面板上的 ⚙︎，或菜单栏的 ☑︎ 图标 → **Settings…**（⌘,） |
 | 开机自动启动 | 菜单栏的 ☑︎ 图标 → **Open at Login** |
 
