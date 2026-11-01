@@ -25,6 +25,8 @@ Most to-do apps make you stop what you're doing and open another app. EdgeTodo h
 - 🤖 **AI-friendly** — tasks live in a plain JSON file, so any AI assistant (or script) can add tasks for you and the panel updates within a second
 - 🪶 **Tiny & native** — a single Swift file, no dependencies, no account, no cloud
 
+🎓 **Blackboard & Canvas deadlines, automatically**: install the free [Bloom](https://github.com/tllct122/bloom-deadlines) browser extension and turn on its EdgeTodo sync. New deadlines appear in EdgeTodo by themselves, with their due dates and reminders, and get ticked off when you submit. It all stays on your Mac.
+
 Works great next to [EdgeClip](https://github.com/tllct122/edge-clip-for-mac), a clipboard history that hides at the left edge — EdgeTodo on the right, EdgeClip on the left, so they never overlap.
 
 ## Install
@@ -55,7 +57,8 @@ The script builds the app, installs it to `/Applications`, and launches it.
 | Move / re-categorize / delete | Right-click a task |
 | Keep it open | Click 📌 |
 | Reminder settings | Settings → **Due Dates & Reminders**: what counts as "due soon", reminder time, edge glow, notifications |
-| Import tasks | ☑︎ menu bar icon → **Import Tasks…**, or turn on **Settings → Import** to pick up `edgetodo-import….json` files from Downloads automatically — e.g. Blackboard deadlines from [Bloom for Blackboard](https://github.com/tllct122/bloom-for-blackboard) |
+| Blackboard / Canvas deadlines | Install [Bloom](https://github.com/tllct122/bloom-deadlines) and turn on **Sync with EdgeTodo automatically** in its settings (EdgeTodo: **Settings → Import → Sync deadlines from Bloom**, on by default) |
+| Import tasks | ☑︎ menu bar icon → **Import Tasks…**, or turn on **Settings → Import** to pick up `edgetodo-import….json` files from Downloads automatically |
 | Settings | Click ⚙︎ on the panel, or the ☑︎ menu bar icon → **Settings…** (⌘,) |
 | Launch at login | ☑︎ menu bar icon → **Open at Login** |
 

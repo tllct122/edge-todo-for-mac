@@ -9,6 +9,7 @@ import Combine
 import ServiceManagement
 import UniformTypeIdentifiers
 import UserNotifications
+import Network
 
 // MARK: - Color helpers
 
@@ -126,6 +127,7 @@ final class AppSettings: ObservableObject {
         static let side = EdgeSide.right
         static let vPosition = VPosition.top
         static let autoImport = false
+        static let bloomSync = true
         static let soonDays = 2
         static let dueOnTop = true
         static let edgeGlow = true
@@ -153,6 +155,7 @@ final class AppSettings: ObservableObject {
     @Published var side: EdgeSide { didSet { save() } }
     @Published var vPosition: VPosition { didSet { save() } }
     @Published var autoImport: Bool { didSet { save() } }
+    @Published var bloomSync: Bool { didSet { save() } }
     @Published var soonDays: Int { didSet { save() } }
     @Published var dueOnTop: Bool { didSet { save() } }
     @Published var edgeGlow: Bool { didSet { save() } }
@@ -181,6 +184,7 @@ final class AppSettings: ObservableObject {
         side = EdgeSide(rawValue: d.string(forKey: "side") ?? "") ?? Default.side
         vPosition = VPosition(rawValue: d.string(forKey: "vPosition") ?? "") ?? Default.vPosition
         autoImport = d.object(forKey: "autoImport") as? Bool ?? Default.autoImport
+        bloomSync = d.object(forKey: "bloomSync") as? Bool ?? Default.bloomSync
         soonDays = d.object(forKey: "soonDays") as? Int ?? Default.soonDays
         dueOnTop = d.object(forKey: "dueOnTop") as? Bool ?? Default.dueOnTop
         edgeGlow = d.object(forKey: "edgeGlow") as? Bool ?? Default.edgeGlow
@@ -210,6 +214,7 @@ final class AppSettings: ObservableObject {
         d.set(side.rawValue, forKey: "side")
         d.set(vPosition.rawValue, forKey: "vPosition")
         d.set(autoImport, forKey: "autoImport")
+        d.set(bloomSync, forKey: "bloomSync")
         d.set(soonDays, forKey: "soonDays")
         d.set(dueOnTop, forKey: "dueOnTop")
         d.set(edgeGlow, forKey: "edgeGlow")
@@ -238,6 +243,7 @@ final class AppSettings: ObservableObject {
         side = Default.side
         vPosition = Default.vPosition
         autoImport = Default.autoImport
+        bloomSync = Default.bloomSync
         soonDays = Default.soonDays
         dueOnTop = Default.dueOnTop
         edgeGlow = Default.edgeGlow
@@ -874,10 +880,20 @@ final class TodoStore: ObservableObject {
     /// (title, category, due date) but keep your status, pin and order.
     @discardableResult
     func importTodos(from url: URL) -> (added: Int, updated: Int)? {
-        guard let data = try? Data(contentsOf: url),
-              let file = try? JSONDecoder().decode(TodoFile.self, from: data) else { return nil }
-        var added = 0, updated = 0
+        guard let data = try? Data(contentsOf: url), let r = merge(data) else { return nil }
+        return (r.added, r.updated + r.finished)
+    }
+
+    /// Merges a todos.json-style list into yours.
+    /// - same id → title, category and due date are updated; your status, pin and order are kept
+    /// - an incoming "completed" task (e.g. you submitted it on Blackboard/Canvas) ticks yours off;
+    ///   finished tasks that aren't on your list yet are skipped
+    /// Returns nil when the data isn't a task list.
+    func merge(_ data: Data) -> (added: Int, updated: Int, finished: Int)? {
+        guard let file = try? JSONDecoder().decode(TodoFile.self, from: data) else { return nil }
+        var added = 0, updated = 0, finished = 0
         for var incoming in file.todos {
+            let isFinished = incoming.status == .completed || incoming.status == .cancelled
             if let i = todos.firstIndex(where: { $0.id == incoming.id }) {
                 if todos[i].title != incoming.title || todos[i].due != incoming.due || todos[i].category != incoming.category {
                     todos[i].title = incoming.title
@@ -885,14 +901,18 @@ final class TodoStore: ObservableObject {
                     todos[i].due = incoming.due
                     updated += 1
                 }
-            } else {
+                if isFinished && todos[i].repeatMode == .none && todos[i].status != .completed && todos[i].status != .cancelled {
+                    todos[i].status = .completed
+                    finished += 1
+                }
+            } else if !isFinished {
                 if incoming.created == nil { incoming.created = TodoStore.now() }
                 todos.append(incoming)
                 added += 1
             }
         }
-        if added + updated > 0 { save() }
-        return (added, updated)
+        if added + updated + finished > 0 { save() }
+        return (added, updated, finished)
     }
 
     /// Drag & drop: put `id` where `targetId` is. Dropping onto a task in another
@@ -1835,8 +1855,14 @@ struct SettingsView: View {
 
                 GroupBox {
                     VStack(alignment: .leading, spacing: 8) {
+                        Toggle("Sync deadlines from Bloom automatically", isOn: $s.bloomSync)
+                        Text("Bloom (a free browser extension for Blackboard and Canvas) sends your deadlines here by itself, and ticks them off when you submit. Only works on this Mac — nothing goes over the internet.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Divider()
                         Toggle("Import tasks from my Downloads folder", isOn: $s.autoImport)
-                        Text("Files named edgetodo-import….json are added to your list and then moved to the Trash — for example deadlines sent from the Bloom for Blackboard browser extension. macOS will ask once to let EdgeTodo see your Downloads folder.")
+                        Text("Files named edgetodo-import….json are added to your list and then moved to the Trash. macOS will ask once to let EdgeTodo see your Downloads folder.")
                             .font(.caption)
                             .foregroundColor(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -1987,6 +2013,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
         setupStatusItem()
         setupReminders()
         setupImportWatcher()
+        setupBloomSync()
 
         let t = Timer(timeInterval: 0.05, target: self, selector: #selector(tick),
                       userInfo: nil, repeats: true)
@@ -2344,6 +2371,60 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
         if added + updated > 0 { announceImport(added: added, updated: updated) }
     }
 
+    // MARK: Bloom sync (local only)
+
+    let syncServer = LocalSyncServer()
+    var lastSyncNotice = Date.distantPast
+
+    func setupBloomSync() {
+        syncServer.onRequest = { [weak self] route, body, reply in
+            Task { @MainActor in
+                guard let self = self else { return reply(503, "{\"error\":\"closed\"}") }
+                self.handleSync(route, body, reply)
+            }
+        }
+        updateBloomSync()
+        settings.$bloomSync
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                DispatchQueue.main.async { self?.updateBloomSync() }   // after the new value is stored
+            }
+            .store(in: &cancellables)
+    }
+
+    func updateBloomSync() {
+        if settings.bloomSync { syncServer.start() } else { syncServer.stop() }
+    }
+
+    func handleSync(_ route: String, _ body: Data, _ reply: @escaping (Int, String) -> Void) {
+        switch route {
+        case "GET /edgetodo/ping":
+            reply(200, "{\"app\":\"EdgeTodo\",\"ok\":true}")
+        case "POST /edgetodo/sync":
+            guard let r = store.merge(body) else { return reply(400, "{\"error\":\"not a task list\"}") }
+            reply(200, "{\"ok\":true,\"added\":\(r.added),\"updated\":\(r.updated),\"finished\":\(r.finished)}")
+            // only speak up when something new arrived (syncs happen every few minutes)
+            if r.added > 0 || r.finished > 0, Date().timeIntervalSince(lastSyncNotice) > 60 {
+                lastSyncNotice = Date()
+                announceSync(added: r.added, finished: r.finished)
+            }
+        default:
+            reply(404, "{\"error\":\"not found\"}")
+        }
+    }
+
+    func announceSync(added: Int, finished: Int) {
+        let parts = [added > 0 ? "\(added) new deadline\(added == 1 ? "" : "s")" : nil,
+                     finished > 0 ? "\(finished) submitted ✓" : nil].compactMap { $0 }
+        holdOpenUntil = Date().addingTimeInterval(4)
+        expand()
+        guard canNotify else { return }
+        let content = UNMutableNotificationContent()
+        content.title = "From Bloom ✿"
+        content.body = parts.joined(separator: ", ")
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "sync-\(UUID().uuidString)", content: content, trigger: nil))
+    }
+
     func announceImport(added: Int, updated: Int) {
         let parts = [added > 0 ? "\(added) new" : nil, updated > 0 ? "\(updated) updated" : nil].compactMap { $0 }
         let text = parts.isEmpty ? "Everything was already on your list" : parts.joined(separator: ", ")
@@ -2373,6 +2454,101 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
             }
             sender.state = SMAppService.mainApp.status == .enabled ? .on : .off
         }
+    }
+}
+
+// MARK: - Local sync (lets the Bloom browser extension send deadlines)
+//
+// A tiny HTTP receiver on 127.0.0.1 only — other computers can't reach it.
+// Web pages can't use it either: requests must carry an "X-EdgeTodo" header, which a page
+// could only send after a CORS preflight, and preflights are refused. Browser extensions
+// with permission for this address (like Bloom) skip CORS and get through.
+
+struct LocalHTTPRequest {
+    let method: String
+    let path: String
+    let headers: [String: String]
+    let body: Data
+
+    /// nil until the whole request has arrived
+    init?(_ buf: Data) {
+        guard let end = buf.range(of: Data("\r\n\r\n".utf8)),
+              let head = String(data: buf[buf.startIndex..<end.lowerBound], encoding: .utf8) else { return nil }
+        let lines = head.components(separatedBy: "\r\n")
+        let first = lines[0].split(separator: " ")
+        guard first.count >= 2 else { return nil }
+        var h: [String: String] = [:]
+        for line in lines.dropFirst() {
+            guard let colon = line.firstIndex(of: ":") else { continue }
+            h[line[..<colon].trimmingCharacters(in: .whitespaces).lowercased()] = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
+        }
+        let length = Int(h["content-length"] ?? "0") ?? 0
+        let body = buf[end.upperBound...]
+        guard body.count >= length else { return nil }
+        method = String(first[0])
+        path = String(first[1].split(separator: "?").first ?? "")
+        headers = h
+        self.body = Data(body.prefix(length))
+    }
+}
+
+final class LocalSyncServer {
+    static let port: UInt16 = 47621
+    private var listener: NWListener?
+    private let queue = DispatchQueue(label: "EdgeTodo.sync")
+    /// ("POST /edgetodo/sync", body, reply(status, json))
+    var onRequest: ((String, Data, @escaping (Int, String) -> Void) -> Void)?
+
+    func start() {
+        guard listener == nil, let port = NWEndpoint.Port(rawValue: LocalSyncServer.port) else { return }
+        let params = NWParameters.tcp
+        params.acceptLocalOnly = true
+        params.allowLocalEndpointReuse = true
+        params.requiredLocalEndpoint = NWEndpoint.hostPort(host: "127.0.0.1", port: port)
+        guard let l = try? NWListener(using: params) else { return }
+        l.newConnectionHandler = { [weak self] c in self?.accept(c) }
+        l.stateUpdateHandler = { [weak l] st in
+            if case .failed = st { l?.cancel() }   // port busy (another copy running) — stay quiet
+        }
+        l.start(queue: queue)
+        listener = l
+    }
+
+    func stop() {
+        listener?.cancel()
+        listener = nil
+    }
+
+    private func accept(_ c: NWConnection) {
+        c.start(queue: queue)
+        read(c, Data())
+    }
+
+    private func read(_ c: NWConnection, _ buf: Data) {
+        c.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isComplete, error in
+            var buf = buf
+            if let data = data { buf.append(data) }
+            guard let self = self, error == nil, buf.count < 4_000_000 else { c.cancel(); return }
+            if let req = LocalHTTPRequest(buf) { self.handle(req, c) }
+            else if isComplete { c.cancel() }
+            else { self.read(c, buf) }
+        }
+    }
+
+    private func handle(_ r: LocalHTTPRequest, _ c: NWConnection) {
+        func send(_ code: Int, _ json: String) {
+            let body = Data(json.utf8)
+            let head = "HTTP/1.1 \(code) \(code == 200 ? "OK" : "Error")\r\nContent-Type: application/json\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n"
+            c.send(content: Data(head.utf8) + body, completion: .contentProcessed { _ in c.cancel() })
+        }
+        let origin = r.headers["origin"] ?? ""
+        let fromExtension = origin.isEmpty || origin.hasPrefix("chrome-extension://") ||
+            origin.hasPrefix("moz-extension://") || origin.hasPrefix("safari-web-extension://")
+        guard r.method != "OPTIONS", r.headers["x-edgetodo"] == "1", fromExtension else {
+            return send(403, "{\"error\":\"forbidden\"}")
+        }
+        guard let onRequest = onRequest else { return send(503, "{\"error\":\"not ready\"}") }
+        onRequest("\(r.method) \(r.path)", r.body) { code, json in send(code, json) }
     }
 }
 

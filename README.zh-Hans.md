@@ -25,6 +25,8 @@
 - 🤖 **AI 友好**：任务保存在一个纯 JSON 文件里，任何 AI 助手或脚本都可以帮你添加任务，面板会在一秒内更新
 - 🪶 **轻巧原生**：只有一个 Swift 文件，不需要任何依赖、账号或云服务
 
+🎓 **Blackboard 和 Canvas 截止日期自动加入**：安装免费的 [Bloom](https://github.com/tllct122/bloom-deadlines) 浏览器扩展，打开 EdgeTodo 同步。新的截止日期会自动出现在 EdgeTodo，附到期日和提醒，提交后会自动勾掉。所有数据只留在你的 Mac。
+
 可以和 [EdgeClip](https://github.com/tllct122/edge-clip-for-mac) 一起用，它是收在屏幕左边的剪贴板历史：EdgeTodo 在右边，EdgeClip 在左边，两者不会重叠。
 
 ## 安装
@@ -55,7 +57,8 @@
 | 移动、改分类、删除 | 在任务上点右键 |
 | 保持面板打开 | 点击 📌 |
 | 提醒设置 | Settings → **Due Dates & Reminders**：“快到期”的天数、提醒时间、屏幕边缘发光、通知 |
-| 导入任务 | 菜单栏 ☑︎ 图标 → **Import Tasks…**，或打开 **Settings → Import**，自动导入“下载”文件夹中的 `edgetodo-import….json`，例如由 [Bloom for Blackboard](https://github.com/tllct122/bloom-for-blackboard) 发来的 Blackboard 截止日期 |
+| Blackboard／Canvas 截止日期 | 安装 [Bloom](https://github.com/tllct122/bloom-deadlines)，在它的设置打开 **Sync with EdgeTodo automatically**（EdgeTodo 的 **Settings → Import → Sync deadlines from Bloom** 默认已打开） |
+| 导入任务 | 菜单栏 ☑︎ 图标 → **Import Tasks…**，或打开 **Settings → Import**，自动导入“下载”文件夹中的 `edgetodo-import….json` |
 | 设置 | 点击面板上的 ⚙︎，或菜单栏的 ☑︎ 图标 → **Settings…**（⌘,） |
 | 开机自动启动 | 菜单栏的 ☑︎ 图标 → **Open at Login** |
 
